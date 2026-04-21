@@ -1,18 +1,18 @@
 /**
- * memoryReelRenderer.js
+ * memoryReelRenderer.js  —  v2 complete rewrite
  *
- * Renderer for the "Memory Reel" template.
- *
- * Each photo is displayed as a large, rotated Polaroid on a dark canvas
- * that accumulates all previously-shown photos as dimmed B&W Polaroids.
- * A slow Ken Burns zoom animates the active photo for its hold duration.
- *
- * Pipeline:
- *   1. sharp  — resize + Polaroid border + drop shadow → color PNG + B&W-dimmed PNG
- *   2. sharp  — composite B&W photos 0..i-1 onto a black canvas → bg_i.png
- *   3. FFmpeg — bg_i.png + color_i.png → zoompan + rotate + overlay → seg_i.mp4
- *   4. FFmpeg — concat demuxer joins all segments; optional audio is faded in/out
- *   (Optional) 3a — title card segment rendered before main segments
+ * Key differences from v1:
+ *  - Canvas: 1920 × 1196  (matches reference video height)
+ *  - Active Polaroid: fit photo inside 1300 × 950 (landscape-first, natural aspect)
+ *  - Polaroid borders: 22 / 22 / 22 / 75  (top / left / right / bottom)
+ *  - Dense background: ONE static BG PNG built from ALL N photos placed at
+ *    15 wall-to-wall BG_POSITIONS — same BG used for every segment
+ *  - BG photos darkened: greyscale + brightness 0.35, then FFmpeg ×0.55 overlay
+ *  - Active photo overlay position: finalX = 240+(i%3)*30, finalY = 80+(i%2)*25
+ *  - Ken Burns: zoom += 0.00004 per frame  (barely perceptible, max ≈ 1.012)
+ *  - Fly-in: active Polaroid slides from x = 2050 to finalX over 20 frames
+ *  - Default seconds-per-photo: 2.8
+ *  - Concat: FFmpeg concat FILTER (no playlist file — immune to Windows path bugs)
  */
 
 import ffmpeg          from 'fluent-ffmpeg';
@@ -31,51 +31,70 @@ fs.mkdirSync(OUTPUTS_DIR, { recursive: true });
 
 // ── Canvas ─────────────────────────────────────────────────────────────────────
 const CANVAS_W = 1920;
-const CANVAS_H = 1080;
+const CANVAS_H = 1196;   // matches reference video (1920×1196)
 const FPS      = 30;
 
-// ── Polaroid geometry (confirmed from reference-frame analysis) ────────────────
-const PHOTO_FIT   = 680;                               // fit photo within this square
-const BORDER_SIDE = 15;                                // top / left / right border
-const BORDER_BOT  = 55;                                // wide Polaroid bottom
-const POLAR_W     = PHOTO_FIT + BORDER_SIDE * 2;      // 710  (Polaroid face)
-const POLAR_H     = PHOTO_FIT + BORDER_SIDE + BORDER_BOT; // 750
+// ── Active Polaroid geometry ───────────────────────────────────────────────────
+// Photo is resized to fit INSIDE 1300×950 while preserving natural aspect ratio.
+// No white letterbox padding — the Polaroid shape adapts to the photo.
+const ACTIVE_MAX_W = 1300;
+const ACTIVE_MAX_H = 950;
+const BORDER_SIDE  = 22;   // top / left / right border (px)
+const BORDER_BOT   = 75;   // wide Polaroid caption strip  (px)
+// NOTE: POLAR_W, POLAR_H, POLAR_CANVAS_W/H are computed PER PHOTO in createActivePolaroid()
 
-// Shadow extends 6 px right + 8 px down → extend canvas to avoid sharp overflow
-const POLAR_CANVAS_W = POLAR_W + 14;   // 724 px  (output PNG width)
-const POLAR_CANVAS_H = POLAR_H + 14;   // 764 px  (output PNG height)
+// ── Background Polaroid geometry (smaller, square contain) ────────────────────
+const BG_PHOTO_FIT  = 680;
+const BG_BORDER_S   = 15;
+const BG_BORDER_B   = 55;
+const BG_POLAR_W    = BG_PHOTO_FIT + BG_BORDER_S * 2;   // 710
+const BG_POLAR_H    = BG_PHOTO_FIT + BG_BORDER_S + BG_BORDER_B;  // 750
+const BG_CANVAS_W   = BG_POLAR_W + 14;   // 724  (shadow padding)
+const BG_CANVAS_H   = BG_POLAR_H + 14;   // 764
 
-// ── Timing ────────────────────────────────────────────────────────────────────
-const TITLE_DUR   = 3.0;  // seconds for optional title card
-const DEFAULT_SPP = 5.5;  // default seconds-per-photo (confirmed from frames)
-const ZOOM_MAX    = 1.04; // Ken Burns maximum zoom (confirmed: subtle)
+// ── Timing ─────────────────────────────────────────────────────────────────────
+const TITLE_DUR   = 3.0;   // title card duration (seconds)
+const DEFAULT_SPP = 2.8;   // default seconds per photo
 
-// ── Background B&W pile scatter positions (cx, cy, angleDeg) on 1920×1080 ─────
-// Photos retire here when the next one becomes active.
-const BG_SCATTER = [
-  [ 480,  540,  -8], [1440,  270,  12], [ 300,  810,  -5], [1600,  810,  15],
-  [ 960,  200, -11], [ 200,  350,   7], [1700,  540, -14], [ 700,  900,   9],
-  [1200,  900,  -6], [ 450,  180,  13], [ 960,  720, -10], [1500,  400,   5],
-  [ 700,  380, -12], [ 250,  680,   8], [1700,  200,  -7], [1100,  300,  11],
-  [ 350,  120,  -9], [1550,  600,  14], [ 800,  120,   6], [1300,  700, -13],
-  [ 600,  700,   4], [1750,  380,  -8], [ 150,  500,  10], [1050,  950,  -5],
-  [ 850,  500,   7], [1400,  950, -11], [ 400,  480,   3], [1650,  150,  16],
-  [ 750,  600,  -4], [1200,  150,   9],
+// ── Ken Burns ──────────────────────────────────────────────────────────────────
+const ZOOM_STEP = 0.00004;  // added per frame — barely perceptible
+const ZOOM_MAX  = 1.02;     // cap at 2% zoom
+
+// ── Fly-in animation ───────────────────────────────────────────────────────────
+const FLY_IN_FRAMES = 20;    // frames to slide from off-screen to final position
+const FLY_IN_START  = 2050;  // starting x (just off right edge of 1920 canvas)
+
+// ── 15 Background scatter positions (cx, cy, angleDeg) ────────────────────────
+// Spread wall-to-wall across 1920 × 1196 so no black gaps show through.
+// Large BG photos (724 × 764 each) overlap significantly at these positions.
+const BG_POSITIONS = [
+  // Row 1  — top area  (cy ≈ 200)
+  [ 150,  200, -12],
+  [ 560,  185,   8],
+  [ 960,  165,  -9],
+  [1360,  190,  11],
+  [1780,  205,  -7],
+  // Row 2  — middle  (cy ≈ 590)
+  [  55,  590,   6],
+  [ 480,  605, -14],
+  [ 960,  590,  10],
+  [1440,  580, -12],
+  [1870,  600,   5],
+  // Row 3  — bottom  (cy ≈ 980)
+  [ 210,  985, -10],
+  [ 660,  965,  13],
+  [1100,  995,  -6],
+  [1550,  975,   9],
+  [1860,  985, -11],
 ];
 
-// Tilt angles for the active (foreground) photo — cycles if N > 16
+// Tilt angles for the active foreground Polaroid (cycles for i > 15)
 const ROTATIONS = [-8, 12, -5, 15, -11, 7, -14, 9, -6, 13, -10, 5, -12, 8, -7, 11];
 
-// Active photo center positions: near canvas center, slight variation per slot
-const ACTIVE_POS = [
-  [960, 540], [920, 522], [980, 555], [940, 530],
-  [970, 548], [952, 537], [988, 552], [935, 526],
-];
+// Extra canvas padding used during BG composite (handles near-edge photos)
+const BG_PAD = 600;
 
-// Extra canvas padding used during B&W composite to handle off-edge photos
-const BG_PAD = 500;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 /** Bounding box (px) of a W×H rect rotated by angleDeg. */
 function rotatedBounds(w, h, angleDeg) {
@@ -86,60 +105,59 @@ function rotatedBounds(w, h, angleDeg) {
   };
 }
 
-// ── Sharp: create one Polaroid PNG ───────────────────────────────────────────
-
+// ── Sharp: create active (color) Polaroid PNG ──────────────────────────────────
 /**
- * Returns a POLAR_CANVAS_W × POLAR_CANVAS_H (724×764) RGB PNG Buffer:
- *   - photo resized to fit PHOTO_FIT px square
- *   - white Polaroid border
- *   - soft drop shadow (offset 6px right, 8px down)
- *   - dark (#0a0a0a) background canvas (14px larger than Polaroid face to fit shadow)
+ * Resizes the photo to fit inside ACTIVE_MAX_W × ACTIVE_MAX_H preserving
+ * natural aspect ratio (no letterboxing).  Returns:
+ *   { buf, polarW, polarH, canvasW, canvasH }
  *
- * @param {string}  imagePath
- * @param {boolean} isGrayscale — true: dimmed B&W for background pile
+ * canvasW / canvasH are the actual PNG output dimensions (Polaroid face + shadow padding).
  */
-async function createPolaroid(imagePath, isGrayscale) {
-  let chain = sharp(imagePath).resize(PHOTO_FIT, PHOTO_FIT, {
-    fit: 'contain',
-    background: { r: 255, g: 255, b: 255, alpha: 1 },
-  });
+async function createActivePolaroid(imagePath) {
+  const meta  = await sharp(imagePath).metadata();
+  const scale = Math.min(ACTIVE_MAX_W / meta.width, ACTIVE_MAX_H / meta.height);
+  const photoW = Math.max(1, Math.round(meta.width  * scale));
+  const photoH = Math.max(1, Math.round(meta.height * scale));
 
-  if (isGrayscale) {
-    // Very dark for background pile (confirmed ~35% brightness from frames)
-    chain = chain.grayscale().modulate({ brightness: 0.35 });
-  } else {
-    chain = chain.modulate({ saturation: 1.1, brightness: 1.02 });
-  }
+  const polarW  = photoW + BORDER_SIDE * 2;
+  const polarH  = photoH + BORDER_SIDE + BORDER_BOT;
+  const canvasW = polarW + 14;   // 14 px shadow overflow
+  const canvasH = polarH + 14;
 
-  const polarBuf = await chain
+  // 1. Resize photo to exact natural size within max box
+  const photoBuf = await sharp(imagePath)
+    .resize(photoW, photoH, { fit: 'fill' })
+    .modulate({ saturation: 1.1, brightness: 1.02 })
+    .png()
+    .toBuffer();
+
+  // 2. Add white Polaroid borders
+  const polarBuf = await sharp(photoBuf)
     .extend({
-      top: BORDER_SIDE, bottom: BORDER_BOT,
-      left: BORDER_SIDE, right: BORDER_SIDE,
+      top:    BORDER_SIDE,
+      bottom: BORDER_BOT,
+      left:   BORDER_SIDE,
+      right:  BORDER_SIDE,
       background: { r: 255, g: 255, b: 255, alpha: 1 },
     })
     .flatten({ background: { r: 255, g: 255, b: 255 } })
     .png()
     .toBuffer();
 
-  // Soft drop shadow: blurred semi-transparent black rectangle
+  // 3. Soft drop shadow
   const shadowBuf = await sharp({
     create: {
-      width:    POLAR_W,
-      height:   POLAR_H,
-      channels: 4,
-      background: { r: 0, g: 0, b: 0, alpha: 100 },
+      width: polarW, height: polarH,
+      channels: 4, background: { r: 0, g: 0, b: 0, alpha: 100 },
     },
   }).blur(8).png().toBuffer();
 
-  // Compose: shadow offset (+6 right, +8 down) then Polaroid on top.
-  // Canvas is 14 px wider/taller than the Polaroid face so the shadow
-  // never overflows sharp's composite bounds.
-  return sharp({
+  // 4. Compose on TRANSPARENT canvas so FFmpeg rotate corners show the BG through
+  //    shadow (semi-transparent) + Polaroid (fully opaque) on alpha=0 background
+  const buf = await sharp({
     create: {
-      width:    POLAR_CANVAS_W,
-      height:   POLAR_CANVAS_H,
-      channels: 3,
-      background: { r: 10, g: 10, b: 10 }, // #0a0a0a matches canvas BG
+      width: canvasW, height: canvasH,
+      channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 },  // fully transparent
     },
   })
     .composite([
@@ -148,25 +166,77 @@ async function createPolaroid(imagePath, isGrayscale) {
     ])
     .png()
     .toBuffer();
+
+  return { buf, polarW, polarH, canvasW, canvasH };
 }
 
-// ── Sharp: background composite ───────────────────────────────────────────────
-
+// ── Sharp: create background (BW dimmed) Polaroid PNG ─────────────────────────
 /**
- * Composites the given B&W Polaroid PNGs onto a 1920×1080 black canvas,
- * each rotated and placed at its BG_SCATTER position.
- * A padded canvas (CANVAS + 2×BG_PAD) is used so near-edge photos don't
- * require clamping; the result is then cropped back to 1920×1080.
+ * Always BG_CANVAS_W × BG_CANVAS_H (724 × 764).
+ * Grayscale + brightness 0.35; shadow kept light so it doesn't bleed.
  */
-async function buildBgPng(bwPaths, tempDir, idx) {
+async function createBgPolaroid(imagePath) {
+  const photoBuf = await sharp(imagePath)
+    .resize(BG_PHOTO_FIT, BG_PHOTO_FIT, {
+      fit:        'contain',
+      background: { r: 255, g: 255, b: 255 },
+    })
+    .grayscale()
+    .modulate({ brightness: 0.40 })  // slightly lighter so photos are visible in BG
+    .png()
+    .toBuffer();
+
+  const polarBuf = await sharp(photoBuf)
+    .extend({
+      top:    BG_BORDER_S,
+      bottom: BG_BORDER_B,
+      left:   BG_BORDER_S,
+      right:  BG_BORDER_S,
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    })
+    .flatten({ background: { r: 255, g: 255, b: 255 } })
+    .png()
+    .toBuffer();
+
+  const shadowBuf = await sharp({
+    create: {
+      width: BG_POLAR_W, height: BG_POLAR_H,
+      channels: 4, background: { r: 0, g: 0, b: 0, alpha: 80 },
+    },
+  }).blur(6).png().toBuffer();
+
+  return await sharp({
+    create: {
+      width: BG_CANVAS_W, height: BG_CANVAS_H,
+      channels: 3, background: { r: 10, g: 10, b: 10 },
+    },
+  })
+    .composite([
+      { input: shadowBuf, top: 7, left: 5 },
+      { input: polarBuf,  top: 0, left: 0 },
+    ])
+    .png()
+    .toBuffer();
+}
+
+// ── Sharp: ONE shared background PNG (all N photos) ───────────────────────────
+/**
+ * Composites ALL bwPaths onto a 1920 × 1196 dark canvas using BG_POSITIONS.
+ * This single PNG is reused as-is for every video segment.
+ */
+async function buildBgPng(bwPaths, tempDir) {
   const cW = CANVAS_W + BG_PAD * 2;
   const cH = CANVAS_H + BG_PAD * 2;
   const layers = [];
 
-  for (let i = 0; i < bwPaths.length; i++) {
-    const [cx, cy, angle] = BG_SCATTER[i % BG_SCATTER.length];
+  // Fill ALL 15 BG_POSITIONS by cycling through available photos.
+  // This ensures full canvas coverage even with fewer than 15 input photos.
+  const numSlots = BG_POSITIONS.length;
+  for (let i = 0; i < numSlots; i++) {
+    const photoPath = bwPaths[i % bwPaths.length];
+    const [cx, cy, angle] = BG_POSITIONS[i];
 
-    const rotBuf = await sharp(bwPaths[i])
+    const rotBuf = await sharp(photoPath)
       .rotate(angle, { background: { r: 10, g: 10, b: 10 } })
       .png()
       .toBuffer();
@@ -183,12 +253,17 @@ async function buildBgPng(bwPaths, tempDir, idx) {
     layers.push({ input: rotBuf, left: Math.max(0, left), top: Math.max(0, top) });
   }
 
-  const bgPath = path.join(tempDir, `bg_${idx}.png`);
+  const bgPath = path.join(tempDir, 'bg_all.png');
 
-  await sharp({
+  // Two-step to avoid sharp pipeline issues with composite+extract chaining
+  const composited = await sharp({
     create: { width: cW, height: cH, channels: 3, background: { r: 10, g: 10, b: 10 } },
   })
     .composite(layers)
+    .png()
+    .toBuffer();
+
+  await sharp(composited)
     .extract({ left: BG_PAD, top: BG_PAD, width: CANVAS_W, height: CANVAS_H })
     .png()
     .toFile(bgPath);
@@ -196,34 +271,55 @@ async function buildBgPng(bwPaths, tempDir, idx) {
   return bgPath;
 }
 
-// ── FFmpeg: single photo segment ──────────────────────────────────────────────
-
+// ── FFmpeg: single photo segment ───────────────────────────────────────────────
 /**
- * Renders one photo segment: bg (static) + Ken-Burns-animated color Polaroid.
+ * Renders one segment:
+ *   input 0 = bg_all.png  (static, darkened in filter)
+ *   input 1 = active Polaroid PNG  (Ken Burns zoom → rotate → fly-in overlay)
  *
- * filter_complex:
- *   bg → format=yuv420p
- *   polar → format → zoompan (Ken Burns) → rotate → overlay on bg
+ * @param {{
+ *   bgPath:    string,
+ *   polarPath: string,
+ *   canvasW:   number,    // POLAR_CANVAS_W for this photo
+ *   canvasH:   number,    // POLAR_CANVAS_H for this photo
+ *   angleDeg:  number,
+ *   finalX:    number,    // overlay top-left x (resting position)
+ *   finalY:    number,    // overlay top-left y
+ *   segDur:    number,
+ *   outPath:   string,
+ * }} opts
  */
-function renderSegment({ bgPath, polarPath, angleDeg, cx, cy, segDur, outPath }) {
+function renderSegment({ bgPath, polarPath, canvasW, canvasH, angleDeg, finalX, finalY, segDur, outPath }) {
   return new Promise((resolve, reject) => {
     const rad    = (angleDeg * Math.PI / 180).toFixed(6);
     const frames = Math.round(segDur * FPS);
-    const zStep  = (0.04 / frames).toFixed(8);
-    // Use POLAR_CANVAS_W/H — the actual PNG output size from createPolaroid
-    const { w: rotW, h: rotH } = rotatedBounds(POLAR_CANVAS_W, POLAR_CANVAS_H, angleDeg);
-    const finalX = Math.round(cx - rotW / 2);
-    const finalY = Math.round(cy - rotH / 2);
+    const { w: rotW, h: rotH } = rotatedBounds(canvasW, canvasH, angleDeg);
     const loopT  = String(Math.ceil(segDur) + 1);
 
+    // Fly-in x expression: slide from FLY_IN_START to finalX over FLY_IN_FRAMES
+    const xExpr =
+      `if(lte(n,${FLY_IN_FRAMES}),` +
+        `${FLY_IN_START}+(${finalX}-${FLY_IN_START})*n/${FLY_IN_FRAMES},` +
+        `${finalX})`;
+
+    // Ken Burns via crop+scale (works with RGBA unlike zoompan)
+    // Crops a slightly shrinking window then scales back to original size → zoom-in effect
+    const zoomCrop =
+      `crop=` +
+        `w='iw/(1+${ZOOM_STEP}*n)':` +
+        `h='ih/(1+${ZOOM_STEP}*n)':` +
+        `x='(iw-iw/(1+${ZOOM_STEP}*n))/2':` +
+        `y='(ih-ih/(1+${ZOOM_STEP}*n))/2',` +
+      `scale=${canvasW}:${canvasH}`;
+
     const filter = [
-      `[0:v]format=yuv420p[bg]`,
-      `[1:v]format=yuv420p,` +
-        `zoompan=z='min(zoom+${zStep},${ZOOM_MAX})':` +
-        `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
-        `d=${frames}:s=${POLAR_CANVAS_W}x${POLAR_CANVAS_H}:fps=${FPS}[zoomed]`,
-      `[zoomed]rotate=a=${rad}:out_w=${rotW}:out_h=${rotH}:fillcolor=0x0a0a0a[rotated]`,
-      `[bg][rotated]overlay=x=${finalX}:y=${finalY}[vout]`,
+      // BG: darken, keep as RGBA for alpha compositing
+      `[0:v]format=rgb24,colorchannelmixer=rr=0.70:gg=0.70:bb=0.70,format=rgba[darkbg]`,
+      // Active Polaroid: RGBA → Ken Burns crop+scale → rotate with transparent fill
+      `[1:v]format=rgba,${zoomCrop}[zoomed]`,
+      `[zoomed]rotate=a=${rad}:out_w=${rotW}:out_h=${rotH}:fillcolor=0x00000000[rotated]`,
+      // Alpha-composite over darkened BG, then convert to yuv420p for encoding
+      `[darkbg][rotated]overlay=x='${xExpr}':y=${finalY},format=yuv420p[vout]`,
     ].join(';');
 
     ffmpeg()
@@ -247,25 +343,24 @@ function renderSegment({ bgPath, polarPath, angleDeg, cx, cy, segDur, outPath })
   });
 }
 
-// ── FFmpeg: title card segment ────────────────────────────────────────────────
-
+// ── FFmpeg: title card segment ─────────────────────────────────────────────────
 /**
- * Renders a 3-second title card:
- *   - Background: ALL photos as B&W scatter pile
- *   - Foreground: first color Polaroid at center with Ken Burns
- *   - Title text fades in over first 0.5 s
+ * 3-second title card: dense BG + first photo centered with Ken Burns + title text.
  */
-function renderTitleSeg({ bgPath, polarPath, titleText, outPath }) {
+function renderTitleSeg({ bgPath, polarPath, canvasW, canvasH, titleText, outPath }) {
   return new Promise((resolve, reject) => {
     const angleDeg = ROTATIONS[0];
-    const rad    = (angleDeg * Math.PI / 180).toFixed(6);
-    const frames = Math.round(TITLE_DUR * FPS);
-    const zStep  = (0.04 / frames).toFixed(8);
-    // Use POLAR_CANVAS_W/H — the actual PNG output size from createPolaroid
-    const { w: rotW, h: rotH } = rotatedBounds(POLAR_CANVAS_W, POLAR_CANVAS_H, angleDeg);
-    const finalX = Math.round(CANVAS_W / 2 - rotW / 2);
-    const finalY = Math.round(CANVAS_H / 2 - rotH / 2);
-    const loopT  = String(Math.ceil(TITLE_DUR) + 1);
+    const rad      = (angleDeg * Math.PI / 180).toFixed(6);
+    const { w: rotW, h: rotH } = rotatedBounds(canvasW, canvasH, angleDeg);
+    const finalX   = Math.round(CANVAS_W / 2 - rotW / 2);
+    const finalY   = Math.round(CANVAS_H / 2 - rotH / 2);
+    const loopT    = String(Math.ceil(TITLE_DUR) + 1);
+
+    // Fly-in from right
+    const xExpr =
+      `if(lte(n,${FLY_IN_FRAMES}),` +
+        `${FLY_IN_START}+(${finalX}-${FLY_IN_START})*n/${FLY_IN_FRAMES},` +
+        `${finalX})`;
 
     // Font (Anton-Regular.ttf preferred; falls back to FFmpeg default)
     const fontPath = path.resolve(__dirname, '..', 'fonts', 'Anton-Regular.ttf');
@@ -273,23 +368,31 @@ function renderTitleSeg({ bgPath, polarPath, titleText, outPath }) {
     const fontStr  = hasFont
       ? `fontfile='${fontPath.replace(/\\/g, '/').replace(/:/g, '\\:')}':` : '';
 
-    // Escape text for FFmpeg drawtext
-    const escaped = (titleText || '')
-      .replace(/\\/g, '\\\\')
-      .replace(/'/g,  "\\'")
-      .replace(/:/g,  '\\:');
+    // Write title to a temp file so we avoid shell-quoting issues with spaces
+    const titleFile = path.join(path.dirname(outPath), 'title.txt');
+    fs.writeFileSync(titleFile, (titleText || '').trim(), 'utf8');
+    const titleFilePath = titleFile.replace(/\\/g, '/').replace(/:/g, '\\:');
+
+    // Ken Burns via crop+scale (works with RGBA unlike zoompan)
+    const zoomCrop =
+      `crop=` +
+        `w='iw/(1+${ZOOM_STEP}*n)':` +
+        `h='ih/(1+${ZOOM_STEP}*n)':` +
+        `x='(iw-iw/(1+${ZOOM_STEP}*n))/2':` +
+        `y='(ih-ih/(1+${ZOOM_STEP}*n))/2',` +
+      `scale=${canvasW}:${canvasH}`;
 
     const filter = [
-      `[0:v]format=yuv420p[bg]`,
-      `[1:v]format=yuv420p,` +
-        `zoompan=z='min(zoom+${zStep},${ZOOM_MAX})':` +
-        `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
-        `d=${frames}:s=${POLAR_CANVAS_W}x${POLAR_CANVAS_H}:fps=${FPS}[zoomed]`,
-      `[zoomed]rotate=a=${rad}:out_w=${rotW}:out_h=${rotH}:fillcolor=0x0a0a0a[rotated]`,
-      `[bg][rotated]overlay=x=${finalX}:y=${finalY}[overlaid]`,
-      // Title text centered horizontally, placed ~73% down canvas; fades in
+      // BG: darken, keep as RGBA for alpha compositing
+      `[0:v]format=rgb24,colorchannelmixer=rr=0.70:gg=0.70:bb=0.70,format=rgba[darkbg]`,
+      // Active Polaroid: RGBA → Ken Burns crop+scale → rotate with transparent fill
+      `[1:v]format=rgba,${zoomCrop}[zoomed]`,
+      `[zoomed]rotate=a=${rad}:out_w=${rotW}:out_h=${rotH}:fillcolor=0x00000000[rotated]`,
+      // Alpha-composite over darkened BG, convert to yuv420p for drawtext
+      `[darkbg][rotated]overlay=x='${xExpr}':y=${finalY},format=yuv420p[overlaid]`,
+      // Title text: fades in over first 0.5 s (use textfile= to avoid space-quoting issues)
       `[overlaid]drawtext=${fontStr}` +
-        `text='${escaped}':` +
+        `textfile='${titleFilePath}':` +
         `fontsize=96:fontcolor=white:` +
         `x='(w-text_w)/2':y='h*0.73':` +
         `shadowcolor=black@0.85:shadowx=4:shadowy=4:` +
@@ -318,53 +421,48 @@ function renderTitleSeg({ bgPath, polarPath, titleText, outPath }) {
   });
 }
 
-// ── FFmpeg: concat all segments + mix audio ───────────────────────────────────
-
+// ── FFmpeg: concat all segments + optional audio ───────────────────────────────
 /**
- * Uses the FFmpeg concat demuxer (-f concat) to join all segments with
- * stream-copy (no re-encode), then mixes in the audio (if provided).
+ * Joins all segments via the FFmpeg concat FILTER (no playlist file).
+ * Each segment is a separate -i input; avoids all Windows drive-letter issues.
  */
-function concatAndMix({ segPaths, audioPath, totalDuration, outPath, tempDir }) {
+function concatAndMix({ segPaths, audioPath, totalDuration, outPath }) {
   return new Promise((resolve, reject) => {
-    // Write concat list with normalized (forward-slash) paths
-    const listFile = path.join(tempDir, '_concat.txt');
-    const lines = segPaths.map(p =>
-      `file '${p.replace(/\\/g, '/').replace(/'/g, "\\'")}'`
-    );
-    fs.writeFileSync(listFile, lines.join('\n'));
+    const n   = segPaths.length;
+    const cmd = ffmpeg();
 
-    const cmd = ffmpeg()
-      .input(listFile)
-      .inputOptions(['-f', 'concat', '-safe', '0']);
+    for (const p of segPaths) cmd.input(p);
+
+    const vInputs = Array.from({ length: n }, (_, i) => `[${i}:v]`).join('');
+    let filter = `${vInputs}concat=n=${n}:v=1:a=0[vout]`;
+
+    const mapArgs   = ['-map', '[vout]'];
+    const audioOpts = [];
 
     if (audioPath) {
       cmd.input(audioPath);
       const fadeStart = Math.max(0, totalDuration - 1.5).toFixed(3);
-      cmd.outputOptions([
-        '-filter_complex',
-        `[1:a]atrim=end=${totalDuration.toFixed(3)},` +
-          `asetpts=PTS-STARTPTS,` +
-          `afade=t=out:st=${fadeStart}:d=1.5[aout]`,
-        '-map', '0:v',
-        '-map', '[aout]',
-        '-c:v', 'copy',
-        '-c:a', 'aac', '-b:a', '192k',
-        '-t', String(totalDuration),
-        '-movflags', '+faststart',
-      ]);
+      filter +=
+        `;[${n}:a]atrim=end=${totalDuration.toFixed(3)},` +
+        `asetpts=PTS-STARTPTS,` +
+        `afade=t=out:st=${fadeStart}:d=1.5[aout]`;
+      mapArgs.push('-map', '[aout]');
+      audioOpts.push('-c:a', 'aac', '-b:a', '192k');
     } else {
-      cmd.outputOptions([
-        '-map', '0:v',
-        '-c:v', 'copy',
-        '-an',
-        '-t', String(totalDuration),
-        '-movflags', '+faststart',
-      ]);
+      audioOpts.push('-an');
     }
 
     cmd
+      .outputOptions([
+        '-filter_complex', filter,
+        ...mapArgs,
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-t', String(totalDuration), '-r', '30',
+        ...audioOpts,
+        '-movflags', '+faststart',
+      ])
       .output(outPath)
-      .on('start', c => console.log('[memory-reel] concat:', c.slice(0, 120) + '…'))
+      .on('start', c => console.log('[memory-reel] concat start:', c.slice(0, 200)))
       .on('error', (err, _o, stderr) => {
         console.error('[memory-reel] concat error:', err.message);
         if (stderr) console.error('[memory-reel] stderr:', stderr.slice(-800));
@@ -375,17 +473,17 @@ function concatAndMix({ segPaths, audioPath, totalDuration, outPath, tempDir }) 
   });
 }
 
-// ── Main export ───────────────────────────────────────────────────────────────
+// ── Main export ────────────────────────────────────────────────────────────────
 
 /**
  * Render the Memory Reel template.
  *
  * @param {{
- *   clipFiles:      string[],          // 4–30 uploaded image paths
- *   audioPath:      string|null,
- *   titleText:      string|null,       // optional title card text
- *   targetDuration: number|null,       // optional total duration (seconds)
- *   onProgress:     ((msg:string)=>void)|undefined,
+ *   clipFiles:      string[],
+ *   audioPath:      string | null,
+ *   titleText:      string | null,
+ *   targetDuration: number | null,
+ *   onProgress:     ((msg: string) => void) | undefined,
  * }} opts
  */
 export async function renderMemoryReel({
@@ -401,59 +499,51 @@ export async function renderMemoryReel({
   try {
     const hasTitle = !!(titleText?.trim());
 
-    // Seconds per photo: respect targetDuration if provided
     const secsPerPhoto = targetDuration
       ? Math.max(1.5, (targetDuration - (hasTitle ? TITLE_DUR : 0)) / N)
       : DEFAULT_SPP;
 
     const totalDuration = (hasTitle ? TITLE_DUR : 0) + N * secsPerPhoto;
 
-    // ── Step 1: Pre-process photos ────────────────────────────────────────────
+    // ── Step 1: Pre-process all photos ────────────────────────────────────────
     onProgress?.('Preparing Polaroid frames…');
-    const colorPaths = [];
-    const bwPaths    = [];
+
+    /** @type {{ path: string; canvasW: number; canvasH: number }[]} */
+    const activePaths = [];
+    const bwPaths     = [];
 
     for (let i = 0; i < N; i++) {
       onProgress?.(`Processing photo ${i + 1} / ${N}…`);
-      const [colorBuf, bwBuf] = await Promise.all([
-        createPolaroid(clipFiles[i], false),
-        createPolaroid(clipFiles[i], true),
+
+      const [active, bgBuf] = await Promise.all([
+        createActivePolaroid(clipFiles[i]),
+        createBgPolaroid(clipFiles[i]),
       ]);
-      const cp = path.join(tempDir, `color_${i}.png`);
+
+      const ap = path.join(tempDir, `active_${i}.png`);
       const bp = path.join(tempDir, `bw_${i}.png`);
-      fs.writeFileSync(cp, colorBuf);
-      fs.writeFileSync(bp, bwBuf);
-      colorPaths.push(cp);
+      fs.writeFileSync(ap, active.buf);
+      fs.writeFileSync(bp, bgBuf);
+
+      activePaths.push({ path: ap, canvasW: active.canvasW, canvasH: active.canvasH });
       bwPaths.push(bp);
     }
 
-    // ── Step 2: Build background composites ───────────────────────────────────
-    // bg[i] = B&W photos 0..i-1 composited (used as background when photo i is active)
-    // bg[N] = all N photos in B&W (used for title card background)
-    onProgress?.('Building background composites…');
-    const bgPaths = [];
+    // ── Step 2: Build ONE shared background PNG (all N photos) ────────────────
+    onProgress?.('Building background collage…');
+    const bgPath = await buildBgPng(bwPaths, tempDir);
 
-    // bg[0] = empty black canvas (first photo has no background pile yet)
-    const emptyBg = path.join(tempDir, 'bg_0.png');
-    await sharp({
-      create: { width: CANVAS_W, height: CANVAS_H, channels: 3, background: { r: 10, g: 10, b: 10 } },
-    }).png().toFile(emptyBg);
-    bgPaths.push(emptyBg);
-
-    for (let i = 1; i <= N; i++) {
-      const bg = await buildBgPng(bwPaths.slice(0, i), tempDir, i);
-      bgPaths.push(bg);
-    }
-
-    // ── Step 3: Render segments ───────────────────────────────────────────────
+    // ── Step 3: Render video segments ─────────────────────────────────────────
     const segPaths = [];
 
     if (hasTitle) {
       onProgress?.('Rendering title card…');
       const titleOut = path.join(tempDir, 'seg_title.mp4');
       await renderTitleSeg({
-        bgPath:    bgPaths[N],         // all photos B&W as background
-        polarPath: colorPaths[0],      // first photo in color at center
+        bgPath,
+        polarPath: activePaths[0].path,
+        canvasW:   activePaths[0].canvasW,
+        canvasH:   activePaths[0].canvasH,
         titleText: titleText.trim(),
         outPath:   titleOut,
       });
@@ -462,26 +552,31 @@ export async function renderMemoryReel({
 
     for (let i = 0; i < N; i++) {
       onProgress?.(`Rendering photo ${i + 1} / ${N}…`);
+
       const angleDeg = ROTATIONS[i % ROTATIONS.length];
-      const [cx, cy] = ACTIVE_POS[i % ACTIVE_POS.length];
-      const segOut   = path.join(tempDir, `seg_${i}.mp4`);
+      const { path: polarPath, canvasW, canvasH } = activePaths[i];
+
+      // Active photo resting position (overlay top-left of rotated bounding box)
+      const finalX = 240 + (i % 3) * 30;
+      const finalY = 80  + (i % 2) * 25;
+
+      const segOut = path.join(tempDir, `seg_${i}.mp4`);
 
       await renderSegment({
-        bgPath:    bgPaths[i],         // B&W photos 0..i-1 as background
-        polarPath: colorPaths[i],
-        angleDeg, cx, cy,
-        segDur:    secsPerPhoto,
-        outPath:   segOut,
+        bgPath, polarPath, canvasW, canvasH,
+        angleDeg, finalX, finalY,
+        segDur: secsPerPhoto,
+        outPath: segOut,
       });
       segPaths.push(segOut);
     }
 
-    // ── Step 4: Concatenate + audio ───────────────────────────────────────────
+    // ── Step 4: Concatenate + optional audio ──────────────────────────────────
     onProgress?.('Concatenating and mixing audio…');
     const filename = `memory_reel_${Date.now()}.mp4`;
     const outPath  = path.join(OUTPUTS_DIR, filename);
 
-    await concatAndMix({ segPaths, audioPath, totalDuration, outPath, tempDir });
+    await concatAndMix({ segPaths, audioPath, totalDuration, outPath });
 
     return {
       outputPath: outPath,
