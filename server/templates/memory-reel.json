@@ -1,0 +1,14 @@
+{
+  "id": "memory-reel",
+  "name": "Memory Reel",
+  "description": "Polaroid photos rotate onto a dark scattered background — perfect for group memories, trips, and year recaps",
+  "tags": ["memories", "polaroid", "slideshow", "yearbook", "social"],
+  "format": { "width": 1920, "height": 1080, "fps": 30 },
+  "minPhotos": 4,
+  "maxPhotos": 30,
+  "clipSlots": "dynamic",
+  "captionMode": "none",
+  "transitions": "custom",
+  "titleSlot": { "optional": true, "label": "Title text (e.g. Summer 2025, Class Trip)" },
+  "audioSlot": { "optional": true, "label": "Background music" }
+}

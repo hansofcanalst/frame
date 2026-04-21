@@ -1,0 +1,14 @@
+{
+  "id": "magazine-cover",
+  "name": "Magazine Cover",
+  "styleTag": "Minimal",
+  "photoCount": 1,
+  "platforms": ["ig-post", "ig-story", "tiktok"],
+  "sizes": [
+    { "id": "ig-45",    "label": "IG 4:5 Portrait", "width": 1080, "height": 1350 },
+    { "id": "ig-story", "label": "IG Story / TikTok", "width": 1080, "height": 1920 }
+  ],
+  "animationDuration": 5,
+  "animationLoop": true,
+  "description": "Full-frame photo with gradient overlay, horizontal rule lines, and tick marks — the geometry of a magazine cover. Slow zoom in the animation."
+}

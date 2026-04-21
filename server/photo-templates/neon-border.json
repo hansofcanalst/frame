@@ -1,0 +1,14 @@
+{
+  "id": "neon-border",
+  "name": "Neon Border",
+  "styleTag": "Neon",
+  "photoCount": 1,
+  "platforms": ["ig-post", "ig-story", "tiktok"],
+  "sizes": [
+    { "id": "ig-post",   "label": "IG Post",          "width": 1080, "height": 1080 },
+    { "id": "ig-story",  "label": "IG Story / TikTok", "width": 1080, "height": 1920 }
+  ],
+  "animationDuration": 2,
+  "animationLoop": true,
+  "description": "Full-frame photo with a glowing cyan-green neon border and corner accent brackets. Border pulses in the animation."
+}

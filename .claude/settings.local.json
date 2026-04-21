@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(npm install:*)",
+      "Bash(node --input-type=module:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -s http://localhost:3001/outputs/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3001/outputs/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" -X POST http://localhost:3001/api/upload)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :3001)",
+      "Bash(findstr LISTENING)",
+      "Bash(taskkill /PID 34020 /F)",
+      "Bash(cmd /c \"taskkill /PID 34020 /F\")",
+      "Bash(cmd /c \"netstat -ano | findstr :3001\")",
+      "Bash(node testProcessor.js)",
+      "Bash(cmd /c \"for /f \\\\\"tokens=5\\\\\" %a in \\('netstat -ano ^| findstr :3002 ^| findstr LISTENING'\\) do taskkill /PID %a /F\")",
+      "Bash(npx --yes vite build --mode development)",
+      "Bash(ffprobe -v quiet -print_format json -show_format -show_streams \"C:\\\\Claude Video-Photo Edit Generator\\\\vrac_collage.mp4\")",
+      "Bash(node -e ' *)",
+      "Bash('C:\\\\Claude Video-Photo Edit Generator\\\\server\\\\node_modules\\\\@ffmpeg-installer\\\\win32-x64\\\\ffmpeg.exe' -i 'C:\\\\Claude Video-Photo Edit Generator\\\\vrac_collage.mp4')",
+      "Bash('C:\\\\Claude Video-Photo Edit Generator\\\\server\\\\node_modules\\\\@ffmpeg-installer\\\\win32-x64\\\\ffmpeg.exe' -i 'C:\\\\Claude Video-Photo Edit Generator\\\\vrac_collage.mp4' -vf fps=2,scale=960:-1 'C:\\\\Claude Video-Photo Edit Generator\\\\reference_frames\\\\frame_%04d.jpg' -y)",
+      "Bash('C:\\\\Claude Video-Photo Edit Generator\\\\server\\\\node_modules\\\\@ffmpeg-installer\\\\win32-x64\\\\ffmpeg.exe' -i 'C:\\\\Claude Video-Photo Edit Generator\\\\vrac_collage.mp4' -vf fps=10,scale=960:-1 -t 8 'C:\\\\Claude Video-Photo Edit Generator\\\\reference_frames\\\\intro_%04d.jpg' -y)",
+      "Bash(dir \"C:\\\\Claude Video-Photo Edit Generator\\\\server\\\\photo-templates\")",
+      "Bash(dir \"C:\\\\Claude Video-Photo Edit Generator\\\\server\\\\renderers\")",
+      "Bash(dir \"C:\\\\Claude Video-Photo Edit Generator\\\\server\\\\routes\")",
+      "Bash(dir \"C:\\\\Claude Video-Photo Edit Generator\\\\client\\\\src\\\\components\" /b)",
+      "Bash(findstr \"Photo\")"
+    ]
+  }
+}

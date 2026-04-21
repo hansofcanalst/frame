@@ -1,0 +1,20 @@
+{
+  "id": "photo-wall",
+  "name": "Photo Wall",
+  "description": "Scattered Polaroid-style photos animate onto a dark canvas — perfect for yearbooks, recaps, and memory reels",
+  "tags": ["memories", "yearbook", "slideshow", "social"],
+  "format": { "width": 1920, "height": 1080, "fps": 30 },
+  "clipSlots": [
+    { "id": "photo_1", "label": "Photo 1", "type": "photo", "durationHint": "2-3s" },
+    { "id": "photo_2", "label": "Photo 2", "type": "photo", "durationHint": "2-3s" },
+    { "id": "photo_3", "label": "Photo 3", "type": "photo", "durationHint": "2-3s" },
+    { "id": "photo_4", "label": "Photo 4", "type": "photo", "durationHint": "2-3s" },
+    { "id": "photo_5", "label": "Photo 5", "type": "photo", "durationHint": "2-3s" },
+    { "id": "photo_6", "label": "Photo 6", "type": "photo", "durationHint": "2-3s" },
+    { "id": "photo_7", "label": "Photo 7 (optional)", "type": "photo", "durationHint": "2-3s", "optional": true },
+    { "id": "photo_8", "label": "Photo 8 (optional)", "type": "photo", "durationHint": "2-3s", "optional": true }
+  ],
+  "captionMode": "none",
+  "transitions": "none",
+  "audioSlot": { "optional": true, "label": "Background music" }
+}

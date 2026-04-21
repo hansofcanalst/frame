@@ -1,0 +1,14 @@
+{
+  "id": "split-duo",
+  "name": "Split Duo",
+  "styleTag": "Editorial",
+  "photoCount": 2,
+  "platforms": ["ig-post", "ig-story", "tiktok"],
+  "sizes": [
+    { "id": "ig-post",   "label": "IG Post (side by side)", "width": 1080, "height": 1080 },
+    { "id": "ig-story",  "label": "IG Story (stacked)",     "width": 1080, "height": 1920 }
+  ],
+  "animationDuration": 4,
+  "animationLoop": true,
+  "description": "Two photos with warm vs cool color grades, split by a white divider. Each half slowly pans away in the animation."
+}

@@ -1,0 +1,14 @@
+{
+  "id": "film-strip",
+  "name": "Film Strip",
+  "styleTag": "Cinematic",
+  "photoCount": 3,
+  "platforms": ["ig-post", "youtube", "tiktok"],
+  "sizes": [
+    { "id": "ig-landscape", "label": "IG Landscape",      "width": 1080, "height": 566 },
+    { "id": "yt-landscape", "label": "YouTube / TikTok",  "width": 1920, "height": 1080 }
+  ],
+  "animationDuration": 4,
+  "animationLoop": true,
+  "description": "Three photos in film-cell rectangles on a black background with sprocket holes. Slowly scrolls in the animation."
+}

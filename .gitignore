@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Generated outputs and uploads (don't commit videos)
+server/outputs/
+server/uploads/
+reference_frames/
+
+# Environment variables
+.env
+.env.local
+*.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build files
+dist/
+build/
+.next/
+
+# Logs
+*.log
+npm-debug.log*
+
+# FFmpeg temp files
+*.tmp
+bg_moment_*.png
+photo_*_color.png
+photo_*_bw.png
+segment_*.mp4
+reference_frames/

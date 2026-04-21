@@ -1,0 +1,20 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["index.js"],
+      "cwd": "${workspaceFolder}/server",
+      "port": 3002,
+      "autoPort": false
+    },
+    {
+      "name": "client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "${workspaceFolder}/client",
+      "port": 5173
+    }
+  ]
+}

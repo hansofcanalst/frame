@@ -1,0 +1,14 @@
+{
+  "id": "polaroid-float",
+  "name": "Polaroid Float",
+  "styleTag": "Classic",
+  "photoCount": 1,
+  "platforms": ["ig-post", "ig-story", "tiktok"],
+  "sizes": [
+    { "id": "ig-post",   "label": "IG Post",          "width": 1080, "height": 1080 },
+    { "id": "ig-story",  "label": "IG Story / TikTok", "width": 1080, "height": 1920 }
+  ],
+  "animationDuration": 3,
+  "animationLoop": true,
+  "description": "Photo sits in a white Polaroid frame on a blurred, darkened version of itself. Gently bobs up and down."
+}

@@ -1,0 +1,23 @@
+{
+  "id": "hall-of-game",
+  "name": "Hall of Game",
+  "description": "Throwback-to-now sports highlight reel with animated word-by-word captions",
+  "previewThumbnail": "/templates/hall-of-game/preview.jpg",
+  "previewVideo":     "/templates/hall-of-game/preview.mp4",
+  "tags": ["sports", "highlights", "throwback"],
+  "format": { "width": 1080, "height": 1440, "fps": 60 },
+  "clipSlots": [
+    { "id": "clip_1", "label": "Intro clip",         "type": "video", "durationHint": "2-4s", "treatmentOptions": ["throwback", "modern", "none"] },
+    { "id": "clip_2", "label": "Action clip 1",      "type": "video", "durationHint": "2-4s", "treatmentOptions": ["throwback", "modern", "none"] },
+    { "id": "clip_3", "label": "Action clip 2",      "type": "video", "durationHint": "2-4s", "treatmentOptions": ["throwback", "modern", "none"] },
+    { "id": "clip_4", "label": "Reaction / closeup", "type": "video", "durationHint": "2-3s", "treatmentOptions": ["throwback", "modern", "none"] },
+    { "id": "clip_5", "label": "Final clip",         "type": "video", "durationHint": "2-4s", "treatmentOptions": ["throwback", "modern", "none"] }
+  ],
+  "captionMode": "word-by-word",
+  "captionStyles": [
+    { "id": "green",  "color": "#00FF41", "strokeColor": "#005500" },
+    { "id": "orange", "color": "#FF6A00", "strokeColor": "#7A3000" }
+  ],
+  "transitions": "hard-cut",
+  "audioSlot": { "optional": true, "label": "Background music or voiceover" }
+}

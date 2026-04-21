@@ -1,0 +1,14 @@
+{
+  "id": "vintage-fade",
+  "name": "Vintage Fade",
+  "styleTag": "Vintage",
+  "photoCount": 1,
+  "platforms": ["ig-post", "ig-story", "tiktok"],
+  "sizes": [
+    { "id": "ig-post",   "label": "IG Post",          "width": 1080, "height": 1080 },
+    { "id": "ig-story",  "label": "IG Story / TikTok", "width": 1080, "height": 1920 }
+  ],
+  "animationDuration": 6,
+  "animationLoop": true,
+  "description": "Vintage color grade with warm tint, reduced saturation, film grain, white vignette, and cream border. Slow Ken Burns zoom."
+}
